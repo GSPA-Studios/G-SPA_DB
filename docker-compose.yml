@@ -1,0 +1,143 @@
+# G-SPA Database Docker Compose Configuration
+
+services:
+  # Nginx Reverse Proxy
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - landing-page
+      - admin-dashboard
+      - fetch-service
+      - query-service
+    networks:
+      - gspa-network
+    restart: unless-stopped
+
+  # Frontend: Landing Page
+  landing-page:
+    build:
+      context: ./frontend/landingPage
+      dockerfile: Dockerfile
+    # Now also expose to host for direct access if needed
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_FETCH_API_URL=/api/fetch
+      - REACT_APP_QUERY_API_URL=/api/query
+      - REACT_APP_ADMIN_DASHBOARD_URL=/admin/login
+      - NODE_ENV=production
+    depends_on:
+      - fetch-service
+      - query-service
+    networks:
+      - gspa-network
+    restart: unless-stopped
+
+  # Frontend: Admin Dashboard
+  admin-dashboard:
+    build:
+      context: ./frontend/adminDashboard
+      dockerfile: Dockerfile
+    # Now also expose to host for direct access if needed
+    ports:
+      - "3001:3000"
+    environment:
+      - REACT_APP_FETCH_API_URL=/api/fetch
+      - REACT_APP_QUERY_API_URL=/api/query
+      - NODE_ENV=production
+    # Add Docker host to /etc/hosts for internal communication
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - fetch-service
+      - query-service
+    networks:
+      - gspa-network
+    restart: unless-stopped
+
+  # Backend: Fetch Service (Flask app for authentication and CRUD)
+  fetch-service:
+    build:
+      context: ./backend/fetching_n_auth
+      dockerfile: Dockerfile
+    # Now also expose to host for direct access if needed
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - FLASK_APP=app/run.py
+      - MONGO_URI=mongodb://mongodb:27017/gspa_db
+      - SESSION_SECRET=your_secure_session_secret
+      # Default test values for Google OAuth (replace with real values in production)
+      - GOOGLE_CLIENT_ID=test-client-id
+      - GOOGLE_CLIENT_SECRET=test-client-secret
+      - CLIENT_ORIGINS=http://landing-page:3000,http://admin-dashboard:3000,http://nginx:80,http://localhost:80,http://localhost:3000,http://localhost:3001
+      - SERVICE_ORIGINS=http://query-service:4000,http://localhost:4000
+      - HOST=0.0.0.0
+      - PORT=5000
+      - IMAGE_STORAGE_DIR=/app/data
+    volumes:
+      - fits-data:/app/data
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - gspa-network
+    restart: unless-stopped
+
+  # Backend: Query Service (Node.js app for data queries)
+  query-service:
+    build:
+      context: ./backend/queries
+      dockerfile: Dockerfile
+    # Now also expose to host for direct access if needed
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - MONGO_URI=mongodb://mongodb:27017/gspa_db
+      - FETCH_SERVICE_URL=http://fetch-service:5000
+      - CLIENT_URL=http://nginx:80
+    volumes:
+      - fits-data:/app/data
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      fetch-service:
+        condition: service_started
+    networks:
+      - gspa-network
+    restart: unless-stopped
+
+  # Database: MongoDB
+  mongodb:
+    image: mongo:latest
+    # Now also expose to host for direct access if needed
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+    environment:
+      - MONGO_INITDB_DATABASE=gspa_db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - gspa-network
+    restart: unless-stopped
+
+networks:
+  gspa-network:
+    driver: bridge
+
+volumes:
+  mongodb-data:
+  fits-data:
